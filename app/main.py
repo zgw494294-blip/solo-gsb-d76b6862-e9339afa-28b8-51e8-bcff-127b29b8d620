@@ -20,7 +20,7 @@ from .core import (
     suggest_background,
 )
 
-app = FastAPI(title="透明图层叠序校准台", version="1.5.0")
+app = FastAPI(title="透明图层叠序校准台", version="1.6.0")
 
 
 @app.get("/api/health")

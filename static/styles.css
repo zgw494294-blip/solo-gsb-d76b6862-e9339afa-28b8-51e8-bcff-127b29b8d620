@@ -257,6 +257,157 @@ input[type="color"] {
 }
 .metric-row b { color: var(--ink); font-weight: 600; }
 
+/* ------------------------- 图层影响诊断 ------------------------- */
+.diag-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  background: #fbfcfe;
+}
+.diag-title { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+.diag-note {
+  font-size: 12px;
+  color: var(--ink-soft);
+  line-height: 1.6;
+  margin-bottom: 6px;
+}
+.diag-note b { color: var(--ink); font-weight: 600; }
+.diag-pos { color: var(--danger); }
+.diag-neg { color: var(--ok); }
+
+.diag-rows { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.diag-row {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  padding: 7px 10px;
+}
+.diag-row.zero { background: #f6f7fa; }
+.diag-row > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+  flex-wrap: wrap;
+}
+.diag-row > summary::-webkit-details-marker { display: none; }
+.diag-row[open] > summary { margin-bottom: 8px; }
+.diag-row-bg {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+.diag-pos-tag {
+  flex: none;
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-radius: 999px;
+  padding: 1px 9px;
+}
+.diag-dot {
+  flex: none;
+  width: 22px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+}
+.diag-dot-bg {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  color: var(--ink-soft);
+  border-style: dashed;
+}
+.diag-id {
+  flex: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 600;
+}
+.diag-op { flex: none; color: var(--ink-soft); font-family: ui-monospace, Menlo, Consolas, monospace; }
+.diag-weight {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.diag-weight-track {
+  width: 90px;
+  height: 8px;
+  border-radius: 999px;
+  background: #e9ebf2;
+  overflow: hidden;
+  display: inline-block;
+}
+.diag-weight-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: 999px;
+}
+.diag-weight-fill.bg { background: #8b93a7; }
+.diag-weight-val { color: var(--ink-soft); font-size: 11px; white-space: nowrap; }
+.diag-delta { flex: none; font-size: 11px; white-space: nowrap; }
+.diag-row.zero .diag-delta { color: var(--ink-soft); }
+@media (max-width: 720px) {
+  .diag-delta { white-space: normal; }
+}
+
+.diag-samples {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 2px;
+}
+.diag-sample {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 7px 10px;
+}
+.diag-sample-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.diag-sse-delta { white-space: nowrap; }
+@media (max-width: 720px) {
+  .diag-sse-delta { white-space: normal; }
+}
+.diag-sample-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  align-items: center;
+}
+.diag-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.diag-cell .mini {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  flex: none;
+}
+.diag-cell-tag { color: var(--ink-soft); font-size: 11px; }
+.diag-rgb-delta {
+  gap: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
 /* 样本卡片 */
 .sample-result {
   border: 1px solid var(--line);

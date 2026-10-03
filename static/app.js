@@ -548,6 +548,7 @@ function renderResult(r) {
         <span>同分时按 ID 字典序决胜</span>
       </div>
     </div>
+    ${r.diagnosis ? renderDiagnosis(r) : ""}
     ${r.samples.map(renderSample).join("")}
   `;
   elResultBody.innerHTML = body;
@@ -608,6 +609,143 @@ function hexToRgba(hex, alpha) {
   const g = parseInt(h.slice(3, 5), 16);
   const b = parseInt(h.slice(5, 7), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// -------------------------------------------------------- 图层影响诊断 --
+
+function renderDiagnosis(r) {
+  const d = r.diagnosis;
+  const layerRows = d.layers
+    .map((L, p) => renderDiagLayerRow(L, r.samples, r.totalSse, p, d.layers.length))
+    .join("");
+  return `
+    <div class="diag-panel">
+      <div class="diag-title">图层影响诊断
+        <span class="hint">（随本次最优叠序返回；按底 → 顶排列，逐层仅临时 α→0 重算，不重新择序、不改写输入）</span>
+      </div>
+      <div class="diag-note">
+        <b>遮蔽程度 / 有效权重</b>：某层有效权重 ＝ 该层自身不透明度 × 其上方各层 (1−不透明度)
+        的乘积，即该层颜色在最终合成色中的直接占比；权重为 0（被上方不透明层完全遮蔽或自身 α=0）
+        标为<b>无直接颜色贡献</b>。背景权重 ＝ 全部层 (1−不透明度) 的乘积；各层权重与背景权重之和恰为 1。
+      </div>
+      <div class="diag-note">
+        <b>对目标误差的影响</b>：逐层仅把该层不透明度临时设为 0、其他参数与顺序不变，按同一线性光规则
+        重算各样本未取整 RGB 预测、HEX 与平方误差。差值一律为<b>禁用后 − 原值</b>：
+        <b class="diag-pos">总误差差值为正</b>表示禁用后误差变大、原层有助于匹配；
+        <b class="diag-neg">为负</b>表示禁用后误差变小、原层在增大误差；为 0 表示该层无直接颜色贡献，
+        禁用不改变预测。点击每层可展开各样本明细。
+      </div>
+      <div class="diag-rows">${layerRows}${renderDiagBackgroundRow(d)}</div>
+    </div>
+  `;
+}
+
+function fmtWeight(v) {
+  return Number((v * 100).toFixed(2)) + "%";
+}
+
+// 带符号的数值文本：正号 +，负号用 −；|v| 小于阈值时按 0 处理
+function signedFmt(v, fn) {
+  if (v > 1e-9) return "+" + fn(v);
+  if (v < -1e-9) return "−" + fn(-v);
+  return "0";
+}
+
+function diagDeltaCls(v) {
+  return v > 1e-9 ? "diag-pos" : v < -1e-9 ? "diag-neg" : "";
+}
+
+function renderDiagLayerRow(L, origSamples, origTotalSse, pos, total) {
+  const posTxt = pos === 0 ? "最底层" : pos + 1 === total ? "最顶层" : `底 → 顶第 ${pos + 1} 层`;
+  const zero = !L.directColorContribution;
+  const wPct = fmtWeight(L.effectiveWeight);
+  const wBar = Math.max(0, Math.min(1, L.effectiveWeight)) * 100;
+  const dCls = diagDeltaCls(L.totalSseDelta);
+  const dTxt = zero
+    ? "无直接颜色贡献：禁用不改变预测，总误差差值 0"
+    : `禁用后总误差差值 ${signedFmt(L.totalSseDelta, fmtSse)}（禁用后 ${fmtSse(L.disabledTotalSse)} ／ 原 ${fmtSse(origTotalSse)}）`;
+  const samplesHtml = L.disabledSamples
+    .map((s) => renderDiagSample(s, origSamples[s.index]))
+    .join("");
+  return `
+    <details class="diag-row${zero ? " zero" : ""}">
+      <summary>
+        <span class="diag-pos-tag">${posTxt}</span>
+        <span class="diag-dot" style="background:${hexToRgba(L.color, L.opacity)}"></span>
+        <span class="diag-id">${escapeHtml(L.id)}</span>
+        <span class="diag-op">α=${Number(L.opacity.toFixed(2))}</span>
+        <span class="diag-weight">
+          <span class="diag-weight-track"><span class="diag-weight-fill" style="width:${wBar.toFixed(2)}%"></span></span>
+          <span class="diag-weight-val">有效权重 ${zero ? "0（无直接颜色贡献）" : wPct}</span>
+        </span>
+        <span class="spacer"></span>
+        <span class="diag-delta ${dCls}">${dTxt}</span>
+      </summary>
+      <div class="diag-samples">${samplesHtml}</div>
+    </details>
+  `;
+}
+
+function renderDiagBackgroundRow(d) {
+  const zero = !d.backgroundDirectColorContribution;
+  const wBar = Math.max(0, Math.min(1, d.backgroundWeight)) * 100;
+  return `
+    <div class="diag-row diag-row-bg${zero ? " zero" : ""}">
+      <span class="diag-pos-tag">背景</span>
+      <span class="diag-dot diag-dot-bg">BG</span>
+      <span class="diag-id">不透明背景</span>
+      <span class="diag-op"></span>
+      <span class="diag-weight">
+        <span class="diag-weight-track"><span class="diag-weight-fill bg" style="width:${wBar.toFixed(2)}%"></span></span>
+        <span class="diag-weight-val">有效权重 ${zero ? "0（无直接颜色贡献）" : fmtWeight(d.backgroundWeight)}</span>
+      </span>
+      <span class="spacer"></span>
+      <span class="diag-delta hint">全部层 (1−α) 之积；为 0 时最终色完全由图层决定（背景被完全遮蔽）</span>
+    </div>
+  `;
+}
+
+function renderDiagSample(dis, orig) {
+  const dCls = diagDeltaCls(dis.sseDelta);
+  const rgbTxt = dis.predictedRgb.map((v) => v.toFixed(2)).join(", ");
+  const origRgbTxt = orig.predictedRgb.map((v) => v.toFixed(2)).join(", ");
+  const chans = "RGB";
+  const rgbDeltaHtml = dis.rgbDelta
+    .map(
+      (dv, c) =>
+        `<span class="${diagDeltaCls(dv)}">${chans[c]} ${signedFmt(dv, (v) => v.toFixed(2))}</span>`
+    )
+    .join("");
+  return `
+    <div class="diag-sample">
+      <div class="diag-sample-head">
+        <span>样本 ${dis.index + 1}</span>
+        <span class="hint">在背景 ${dis.background} 上重算（目标 ${dis.target}）</span>
+        <span class="spacer"></span>
+        <span class="diag-sse-delta ${dCls}">
+          禁用后 SSE ${fmtSse(dis.sse)} ／ 原 ${fmtSse(orig.sse)}，差值 ${signedFmt(dis.sseDelta, fmtSse)}
+        </span>
+      </div>
+      <div class="diag-sample-grid">
+        <div class="diag-cell">
+          <span class="diag-cell-tag">原预测</span>
+          <span class="mini" style="background:${orig.predictedHex}"></span>
+          <span class="hexval">${orig.predictedHex}</span>
+          <span class="hint">rgb(${origRgbTxt})</span>
+        </div>
+        <div class="diag-cell">
+          <span class="diag-cell-tag">禁用该层后预测（取整 HEX）</span>
+          <span class="mini" style="background:${dis.predictedHex}"></span>
+          <span class="hexval">${dis.predictedHex}</span>
+          <span class="hint">rgb(${rgbTxt})</span>
+        </div>
+        <div class="diag-cell diag-rgb-delta">
+          <span class="diag-cell-tag">未取整 RGB 差值（禁用后 − 原，0–255）</span>
+          ${rgbDeltaHtml}
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function fmtSse(v) {

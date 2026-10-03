@@ -12,6 +12,10 @@
 - 过渡步骤规划：给出当前实际底→顶叠序与非负有限的过渡总误差上限，在
   「满足先后关系且旧样本总误差不超过上限」的状态图上，以相邻交换为边做 BFS，
   求交换次数最少的完整路径；并列时按每步交换前两层 ID 对序列的字典序决胜
+- 图层影响诊断：对最优叠序按底→顶给出各层有效权重（自身不透明度乘其上
+  各层的 (1−不透明度)，背景权重为全部层 (1−不透明度) 的乘积）；再逐层
+  把该层不透明度临时设为 0（顺序与其他参数不变）重算各样本未取整 RGB
+  预测、HEX 与平方误差，并给出相对原结果的差值（禁用后 − 原值）
 """
 
 from __future__ import annotations
@@ -592,6 +596,77 @@ def _sample_details(
     return results, total
 
 
+# ----------------------------------------------------- 图层影响诊断 --
+
+
+def _layer_diagnosis(
+    parsed: _Parsed,
+    order: list[int],
+    sample_results: list[dict[str, Any]],
+    total_sse: float,
+) -> dict[str, Any]:
+    """针对最优叠序组装「图层影响诊断」。
+
+    有效权重按底→顶位置给出：某层有效权重 = 自身不透明度 × 其上各层
+    (1−不透明度) 的乘积；背景有效权重 = 全部层 (1−不透明度) 的乘积
+    （各层权重与背景权重之和恰为 1）。权重为 0 标为无直接颜色贡献。
+
+    随后逐层仅把该层不透明度临时设为 0，保持其他参数与底→顶顺序不变，
+    按现有线性光规则重算各样本未取整 RGB 预测、取整 HEX 与平方误差；
+    差值一律为「禁用后值 − 原值」：总误差差值为正表示原层有助于匹配，
+    为负表示原层反而增大误差。不重新择序，也不改写任何输入。
+    """
+    n = len(order)
+    alphas = parsed.alphas
+
+    # 每个底→顶位置上，其上各层 (1−α) 的后缀乘积
+    above_pass = [1.0] * n
+    for p in range(n - 2, -1, -1):
+        above_pass[p] = above_pass[p + 1] * (1.0 - alphas[order[p + 1]])
+
+    layers_out: list[dict[str, Any]] = []
+    for p, idx in enumerate(order):
+        weight = alphas[idx] * above_pass[p]
+        layer_out: dict[str, Any] = {
+            "id": parsed.ids[idx],
+            "index": idx,
+            "position": p,
+            "color": parsed.hexes[idx],
+            "opacity": alphas[idx],
+            "effectiveWeight": weight,
+            "directColorContribution": weight > 0.0,
+            "disabledSamples": [],
+            "disabledTotalSse": 0.0,
+            "totalSseDelta": 0.0,
+        }
+
+        # 仅把该层 α 临时置 0，其余参数与顺序原样保留（不重新择序）
+        disabled_alphas = alphas.copy()
+        disabled_alphas[idx] = 0.0
+        disabled_samples, disabled_total = _sample_details(parsed, order, disabled_alphas)
+
+        for orig, dis in zip(sample_results, disabled_samples):
+            rgb_delta = [dis["predictedRgb"][c] - orig["predictedRgb"][c] for c in range(3)]
+            dis["rgbDelta"] = rgb_delta
+            dis["sseDelta"] = dis["sse"] - orig["sse"]
+            layer_out["disabledSamples"].append(dis)
+        layer_out["disabledTotalSse"] = disabled_total
+        layer_out["totalSseDelta"] = disabled_total - total_sse
+        layers_out.append(layer_out)
+
+    background_weight = 1.0
+    for idx in order:
+        background_weight *= 1.0 - alphas[idx]
+
+    return {
+        "order": [parsed.ids[idx] for idx in order],
+        "orderIndexes": list(order),
+        "layers": layers_out,
+        "backgroundWeight": background_weight,
+        "backgroundDirectColorContribution": background_weight > 0.0,
+    }
+
+
 # ------------------------------------------------------------------- 求解 --
 
 
@@ -674,6 +749,10 @@ def solve(payload: Any) -> dict[str, Any]:
     # 与 infer_opacities 的「调整前」走同一明细汇总，保证两边 totalSse 逐位一致
     sample_results, total_sse = _sample_details(parsed, list(best_perm), parsed.alphas)
 
+    # 图层影响诊断随成功响应一并返回；仅做权重计算与逐层 α→0 重算，
+    # 不重新择序、不改写输入，旧字段全部原样保留
+    diagnosis = _layer_diagnosis(parsed, list(best_perm), sample_results, total_sse)
+
     return {
         "order": [parsed.ids[idx] for idx in best_perm],
         "orderIndexes": list(best_perm),
@@ -685,6 +764,7 @@ def solve(payload: Any) -> dict[str, Any]:
         "permutationsChecked": total_count,
         "feasibleCount": feasible_count,
         "samples": sample_results,
+        "diagnosis": diagnosis,
     }
 
 
