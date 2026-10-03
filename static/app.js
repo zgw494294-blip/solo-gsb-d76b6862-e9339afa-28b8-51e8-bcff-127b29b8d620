@@ -548,6 +548,7 @@ function renderResult(r) {
         <span>同分时按 ID 字典序决胜</span>
       </div>
     </div>
+    ${renderDiagnosis(r)}
     ${r.samples.map(renderSample).join("")}
   `;
   elResultBody.innerHTML = body;
@@ -608,6 +609,126 @@ function hexToRgba(hex, alpha) {
   const g = parseInt(h.slice(3, 5), 16);
   const b = parseInt(h.slice(5, 7), 16);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// ------------------------------------------------------------ 图层影响诊断 --
+
+function fmtPct(w) {
+  return Number((w * 100).toFixed(2)).toString() + "%";
+}
+
+// 差值 = 禁用后 − 原值：正值表示该层有助于匹配，负值表示该层增大误差
+function fmtDelta(d) {
+  if (Math.abs(d) < 1e-9) return "持平";
+  return `${d > 0 ? "+" : "−"}${fmtSse(Math.abs(d))}`;
+}
+
+function diagDeltaCls(d) {
+  if (Math.abs(d) < 1e-9) return "";
+  return d > 0 ? "diag-pos" : "diag-neg";
+}
+
+// 诊断随求解结果一起落地与更新（同一响应、同一守卫），无需单独的失效处理
+function renderDiagnosis(r) {
+  const diag = r.diagnosis;
+  if (!diag || !diag.layers) return "";
+
+  // ---- 有效权重条（底 → 顶：背景在最左，顶层在最右）----
+  const barSegs = [
+    `<span class="diag-seg diag-seg-bg" style="width:${diag.backgroundWeight * 100}%"` +
+      ` title="背景权重 ${fmtPct(diag.backgroundWeight)}"></span>`,
+  ];
+  diag.layers.forEach((d, k) => {
+    const layer = r.layers[k];
+    barSegs.push(
+      `<span class="diag-seg" style="width:${d.weight * 100}%;` +
+        ` background:${hexToRgba(layer.color, layer.opacity)}"` +
+        ` title="${escapeHtml(d.id)} 有效权重 ${fmtPct(d.weight)}"></span>`
+    );
+  });
+
+  // ---- 权重明细行（零权重标为无直接颜色贡献）----
+  const zeroBadge = '<span class="diag-zero-badge">无直接颜色贡献</span>';
+  const bgRow = `
+    <div class="diag-weight-row">
+      <span class="mini-dot diag-bg-dot"></span>
+      <span class="diag-wid">背景</span>
+      <span class="spacer"></span>
+      <span class="diag-w">权重 <b>${fmtPct(diag.backgroundWeight)}</b></span>
+      ${diag.backgroundWeight === 0 ? zeroBadge : ""}
+    </div>`;
+  const weightRows = diag.layers
+    .map((d, k) => {
+      const layer = r.layers[k];
+      return `
+        <div class="diag-weight-row">
+          <span class="mini-dot" style="background:${hexToRgba(layer.color, layer.opacity)}"></span>
+          <span class="diag-wid hexval">${escapeHtml(d.id)}</span>
+          <span class="hint">α=${fmtOpacity(d.opacity)}</span>
+          <span class="spacer"></span>
+          <span class="diag-w">有效权重 <b>${fmtPct(d.weight)}</b></span>
+          ${d.weight === 0 ? zeroBadge : ""}
+        </div>`;
+    })
+    .join("");
+
+  // ---- 逐层禁用影响（仅该层 α 临时置 0，其余参数与叠序不变）----
+  const layerBlocks = diag.layers
+    .map((d, k) => {
+      const layer = r.layers[k];
+      const cls = diagDeltaCls(d.totalDelta);
+      const verdict =
+        Math.abs(d.totalDelta) < 1e-9
+          ? "影响持平"
+          : d.totalDelta > 0
+            ? "该层有助于匹配"
+            : "该层增大误差";
+      const sampleRows = d.samples
+        .map((s) => {
+          const rgbTxt = s.predictedRgb.map((v) => Math.round(v)).join(", ");
+          return `
+            <div class="diag-sample-row">
+              <span class="diag-sample-tag">样本 ${s.index + 1}</span>
+              <span class="hint">背景 ${s.background}</span>
+              <span class="mini" style="background:${s.predictedHex}"></span>
+              <span class="hexval">${s.predictedHex}</span>
+              <span class="hint">rgb(${rgbTxt})</span>
+              <span class="spacer"></span>
+              <span class="hint">SSE <b>${fmtSse(s.sse)}</b></span>
+              <span class="diag-delta ${diagDeltaCls(s.sseDelta)}">${fmtDelta(s.sseDelta)}</span>
+            </div>`;
+        })
+        .join("");
+      return `
+        <div class="diag-layer">
+          <div class="diag-layer-head">
+            <span class="mini-dot" style="background:${hexToRgba(layer.color, layer.opacity)}"></span>
+            <b class="hexval">${escapeHtml(d.id)}</b>
+            <span class="hint">α=${fmtOpacity(d.opacity)} · 有效权重 ${fmtPct(d.weight)}</span>
+            <span class="spacer"></span>
+            <span class="hint">禁用后总误差 <b>${fmtSse(d.totalSse)}</b></span>
+            <span class="diag-delta ${cls}">${fmtDelta(d.totalDelta)}</span>
+            <span class="diag-verdict ${cls}">${verdict}</span>
+          </div>
+          <div class="diag-samples">${sampleRows}</div>
+        </div>`;
+    })
+    .join("");
+
+  return `
+    <div class="diag-panel">
+      <div class="order-title">图层影响诊断（基于本次最优叠序，不重新择序）</div>
+      <div class="diag-sec">
+        有效权重 ＝ 该层 α × 其上各层 (1−α) 的乘积；背景权重 ＝ 全部层 (1−α) 的乘积（底 → 顶）
+      </div>
+      <div class="checker"><div class="diag-bar">${barSegs.join("")}</div></div>
+      <div class="diag-weights">${bgRow}${weightRows}</div>
+      <div class="diag-sec">
+        逐层禁用影响：仅把该层 α 临时设为 0，其余参数与叠序不变；差值 ＝ 禁用后 − 原值，
+        正值表示该层有助于匹配，负值表示该层增大误差
+      </div>
+      ${layerBlocks}
+    </div>`;
 }
 
 function fmtSse(v) {

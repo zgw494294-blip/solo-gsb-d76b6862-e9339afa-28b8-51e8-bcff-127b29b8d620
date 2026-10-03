@@ -4,6 +4,10 @@
 - 线性光空间内逐层 alpha 合成（Porter-Duff "over"）
 - 枚举全部底到顶排列，按未取整 RGB 通道平方误差总和选优
 - 同分时按 ID 序列字典序决胜
+- 图层影响诊断：按选定的底→顶顺序给出每层有效权重（自身 α × 其上各层 (1−α)
+  的乘积）与背景权重（全部层 (1−α) 的乘积），并逐层仅把该层不透明度临时置 0、
+  保持其余参数与顺序重算各样本未取整 RGB 预测与平方误差，以「禁用后 − 原值」
+  的差值衡量各层对目标误差的影响（不重新择序、不改写输入）
 - 图层顺序确定后，可在 0.00～1.00（步长 0.01）网格上联合反推 1～2 个图层的不透明度
 - 下一次背景测量建议：保留总误差不高于最优总误差 + 容差的叠序，
   在候选背景上渲染后以「任意两条预测色未取整 RGB 平方距离最小值」打分并推荐
@@ -592,6 +596,58 @@ def _sample_details(
     return results, total
 
 
+# --------------------------------------------------------- 图层影响诊断 --
+
+
+def _layer_diagnosis(
+    parsed: _Parsed,
+    order: list[int],
+    base_samples: list[dict[str, Any]],
+    base_total: float,
+) -> dict[str, Any]:
+    """图层影响诊断（基于已选定的底→顶顺序，不重新择序、不改写输入）。
+
+    有效权重：该层不透明度 × 其上各层 (1−不透明度) 的乘积；背景权重为全部
+    图层 (1−不透明度) 的乘积。线性光 "over" 合成下，未取整预测色正是背景色与
+    各层颜色按这些权重的加权和；权重为 0 表示该层被完全遮蔽，无直接颜色贡献。
+
+    逐层仅把该层不透明度临时设为 0（其余参数与顺序保持不变），按现有线性光
+    规则重算各样本未取整 RGB 预测值、HEX 与平方误差；差值 = 禁用后 − 原值，
+    正值表示原层有助于匹配，负值表示原层增大误差。
+    """
+    n = len(order)
+
+    # 自顶向下累乘上方各层的 (1−α)，即得每层有效权重；循环结束即背景权重
+    weights = [0.0] * n
+    suffix = 1.0
+    for pos in range(n - 1, -1, -1):
+        weights[pos] = parsed.alphas[order[pos]] * suffix
+        suffix *= 1.0 - parsed.alphas[order[pos]]
+
+    layers: list[dict[str, Any]] = []
+    for pos in range(n):
+        idx = order[pos]
+        disabled_alphas = list(parsed.alphas)
+        disabled_alphas[idx] = 0.0
+        off_samples, off_total = _sample_details(parsed, order, disabled_alphas)
+        for off_entry, base_entry in zip(off_samples, base_samples):
+            off_entry["sseDelta"] = off_entry["sse"] - base_entry["sse"]
+        layers.append(
+            {
+                "id": parsed.ids[idx],
+                "index": idx,
+                "position": pos,
+                "opacity": parsed.alphas[idx],
+                "weight": weights[pos],
+                "totalSse": off_total,
+                "totalDelta": off_total - base_total,
+                "samples": off_samples,
+            }
+        )
+
+    return {"backgroundWeight": suffix, "layers": layers}
+
+
 # ------------------------------------------------------------------- 求解 --
 
 
@@ -673,6 +729,8 @@ def solve(payload: Any) -> dict[str, Any]:
     assert best_perm is not None
     # 与 infer_opacities 的「调整前」走同一明细汇总，保证两边 totalSse 逐位一致
     sample_results, total_sse = _sample_details(parsed, list(best_perm), parsed.alphas)
+    # 图层影响诊断基于同一最优顺序与同一明细口径，随求解结果一起返回
+    diagnosis = _layer_diagnosis(parsed, list(best_perm), sample_results, total_sse)
 
     return {
         "order": [parsed.ids[idx] for idx in best_perm],
@@ -685,6 +743,7 @@ def solve(payload: Any) -> dict[str, Any]:
         "permutationsChecked": total_count,
         "feasibleCount": feasible_count,
         "samples": sample_results,
+        "diagnosis": diagnosis,
     }
 
 
